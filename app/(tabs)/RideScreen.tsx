@@ -13,15 +13,21 @@ type AccelerometerData = {
 
 /* ---------------- Tuned Parameters ---------------- */
 
-// Very slow LPF → gravity
-const ALPHA_GRAVITY = 0.8;
+// Gravity estimation (very slow)
+const ALPHA_GRAVITY = 0.9;
 
-// Faster LPF → step band
-const ALPHA_STEP = 0.5;
+// Step band smoothing (faster)
+const ALPHA_STEP = 0.75;
 
-// Step detection
-const STEP_THRESHOLD = 0.3;
-const MIN_STEP_INTERVAL = 250; // ms
+// Noise rejection
+const DEAD_ZONE = 0.08;
+
+// Hysteresis thresholds
+const STEP_THRESHOLD_HIGH = 0.06; // step strength
+const STEP_THRESHOLD_LOW = 0.12; // re-arm
+
+// Timing
+const MIN_STEP_INTERVAL = 350; // ms
 
 /* ---------------- Component ---------------- */
 
@@ -40,16 +46,16 @@ const RideScreen: React.FC = () => {
 
   const gravityRef = useRef(0);
   const stepSignalRef = useRef(0);
-  const prevStepSignalRef = useRef(0);
   const lastStepTimeRef = useRef(0);
+  const aboveThresholdRef = useRef(false);
 
   /* ---------------- Processing ---------------- */
 
   const processSample = (x: number, y: number, z: number) => {
-    // Magnitude (orientation independent)
+    // Orientation-independent magnitude
     const mag = Math.sqrt(x * x + y * y + z * z);
 
-    // 1️⃣ Gravity estimation (very slow LPF)
+    // 1️⃣ Gravity LPF
     gravityRef.current =
       ALPHA_GRAVITY * gravityRef.current +
       (1 - ALPHA_GRAVITY) * mag;
@@ -57,33 +63,45 @@ const RideScreen: React.FC = () => {
     // 2️⃣ Remove gravity
     const dynamic = mag - gravityRef.current;
 
-    // 3️⃣ Step-band LPF (faster)
+    // 3️⃣ Step-band LPF
     stepSignalRef.current =
       ALPHA_STEP * stepSignalRef.current +
       (1 - ALPHA_STEP) * dynamic;
 
-    // Debug values for UI
+    // 4️⃣ Dead-zone noise suppression
+    const gatedSignal =
+      Math.abs(stepSignalRef.current) < DEAD_ZONE
+        ? 0
+        : stepSignalRef.current;
+
+    // Debug UI values
     setGravity(gravityRef.current);
-    setStepSignal(stepSignalRef.current);
+    setStepSignal(gatedSignal);
 
-    // 4️⃣ Step detection
-    detectStep(stepSignalRef.current);
-
-    prevStepSignalRef.current = stepSignalRef.current;
+    // 5️⃣ Detect step
+    detectStep(gatedSignal);
   };
 
   const detectStep = (value: number) => {
     const now = Date.now();
-    const prev = prevStepSignalRef.current;
 
-    // Rising edge + debounce
+    // Rising edge → count step
     if (
-      prev < STEP_THRESHOLD &&
-      value >= STEP_THRESHOLD &&
+      !aboveThresholdRef.current &&
+      value > STEP_THRESHOLD_HIGH &&
       now - lastStepTimeRef.current > MIN_STEP_INTERVAL
     ) {
       setStepCount((s) => s + 1);
       lastStepTimeRef.current = now;
+      aboveThresholdRef.current = true;
+    }
+
+    // Falling edge → re-arm detector
+    if (
+      aboveThresholdRef.current &&
+      value < STEP_THRESHOLD_LOW
+    ) {
+      aboveThresholdRef.current = false;
     }
   };
 
@@ -108,7 +126,7 @@ const RideScreen: React.FC = () => {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Step Counter (Debug)</Text>
+      <Text style={styles.title}>Step Counter</Text>
 
       <View style={styles.dataBox}>
         <Text style={styles.dataText}>
@@ -160,7 +178,7 @@ const styles = StyleSheet.create({
     padding: 25,
     borderRadius: 12,
     width: "80%",
-    maxWidth: 340,
+    maxWidth: 360,
   },
   dataText: {
     fontSize: 18,
